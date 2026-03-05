@@ -1,6 +1,25 @@
-ultralytics
-opencv-python
+# Core deep learning
 torch
 torchvision
-pyttsx3
+
+# Object detection (YOLOv8)
+ultralytics
+
+# Computer vision
+opencv-python
+
+# Numerical operations
 numpy
+scipy
+
+# Text-to-speech
+pyttsx3
+
+# Image utilities used by MiDaS
+Pillow
+
+# Progress bars / utilities (used by ultralytics & midas)
+tqdm
+
+# YAML config parsing
+pyyaml
