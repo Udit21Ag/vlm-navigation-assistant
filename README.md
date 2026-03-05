@@ -11,16 +11,6 @@ The project focuses on **cluttered Indian street environments**, which contain u
 
 # Project Objective
 
-Traditional vision-language models generate **generic captions**, such as:
-
-> "A street with vehicles and pedestrians."
-
-However, visually impaired users require **precise spatial information**:
-
-- Where is the obstacle?
-- How far is it?
-- Is it in the walking path?
-
 This project builds a system that answers those questions using:
 
 1. **Object Detection**
@@ -242,6 +232,8 @@ vlm-navigation-assistant
 ├── models
 │   ├── detector.py
 │   ├── spatial_reasoning.py
+│   ├── navigation_agent.py
+│   ├── scene_graph.py
 │   └── depth_estimator.py
 │
 ├── caption
@@ -315,9 +307,15 @@ outputs/road_boxed.jpg
 # Future Improvements
 
 ## Planned upgrades:
+
 Video input instead of images
+
 Multi-frame input and dynamic frame stitcher
+
 Lane-aware navigation
+
 Real-world distance estimation
+
 Fine-tuned model on Indian Road Dataset (IDD)
+
 Enhanced visualization and Spatial reasoning
