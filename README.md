@@ -23,7 +23,7 @@ This project builds a system that answers those questions using:
 # System Architecture
 
 The navigation system processes an image using the following pipeline:
-
+```
 Input Image
 │
 ├── Object Detection (YOLOv8)
@@ -37,7 +37,7 @@ Input Image
 │
 └── Navigation Cue Generation
     Generate spoken instructions
-
+```
 
 ---
 
