@@ -1,9 +1,28 @@
+# Python
 __pycache__/
 *.pyc
-.env
+
+# Environments
 venv/
+.env
+
+# datasets
 data/
-models/*.pth
-*.pt
-.ipynb_checkpoints
+
+# OS files
 .DS_Store
+
+# External repo
+MiDaS/
+
+# model weights
+*.pt
+*.pth
+models/*.pth
+
+runs/
+outputs/
+samples/
+
+# Jupyter
+.ipynb_checkpoints/
