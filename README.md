@@ -275,7 +275,23 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 4. Install MiDaS
+## 4. Download Model Weights
+
+Download the weights file:
+[Download Model_v1.0 weights](https://github.com/Udit21Ag/vlm-navigation-assistant/releases/download/v1.0/idd_best.pt)
+
+Add the file in the project directory as:
+```bash
+vlm-navigation-assistant
+│
+├── models
+│   ├── weights
+│       ├── idd_best.pt  (Add the file in weights/models)
+...
+```
+
+
+## 5. Install MiDaS
 
 Clone the MiDaS repository:
 ```bash
@@ -291,7 +307,7 @@ Place file inside:
 MiDaS/weights/
 ```
 
-## 5. Run the Navigation System
+## 6. Run the Navigation System
 ```bash
 python main.py --image samples/road.jpg
 ```
