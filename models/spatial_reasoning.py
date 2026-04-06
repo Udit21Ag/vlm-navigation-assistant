@@ -24,21 +24,26 @@ class SpatialReasoner:
 
         if self.depth_map is not None:
 
-            obj_x = int(np.clip(center_x, 0, self.w - 1))
-            obj_y = int(np.clip(bottom_y, 0, self.h - 1))
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(self.w - 1, x2)
+            y2 = min(self.h - 1, y2)
 
-            depth_value = self.depth_map[obj_y, obj_x]
+            region = self.depth_map[y1:y2, x1:x2]
 
-            min_depth = np.min(self.depth_map)
-            max_depth = np.max(self.depth_map)
+            if region.size == 0:
+                depth_value = self.depth_map[int(bottom_y), int(center_x)]
+            else:
+                depth_value = np.median(region)
 
-            normalized_depth = (depth_value - min_depth) / (max_depth - min_depth + 1e-6)
+            # MiDaS produces inverse depth
+            depth_score = 1.0 / (depth_value + 1e-6)
 
-            if normalized_depth < 0.15:
+            if depth_score > 0.015:
                 distance = "very close"
-            elif normalized_depth < 0.30:
+            elif depth_score > 0.010:
                 distance = "near"
-            elif normalized_depth < 0.50:
+            elif depth_score > 0.005:
                 distance = "moderate distance"
             else:
                 distance = "far"
@@ -63,49 +68,33 @@ class SpatialReasoner:
         obj_x = (x1 + x2) / 2
         obj_y = y2
 
-        # -------------------------------
-        # Fallback 2D geometric risk
-        # -------------------------------
         fallback_depth_score = obj_y / self.h
         fallback_center_score = 1 - abs(obj_x - self.w/2) / (self.w/2)
         risk_score = 0.7 * fallback_depth_score + 0.3 * fallback_center_score
 
-        # -------------------------------
-        # Depth-aware 3D refinement
-        # -------------------------------
         if self.depth_map is not None:
 
-            # Clamp coordinates safely
             obj_x_int = int(np.clip(obj_x, 0, self.w - 1))
             obj_y_int = int(np.clip(obj_y, 0, self.h - 1))
 
-            region = self.depth_map[obj_y_int-3:obj_y_int+3, obj_x_int-3:obj_x_int+3]
-            depth_value = np.mean(region)
+            y1r = max(0, obj_y_int - 3)
+            y2r = min(self.h, obj_y_int + 3)
+            x1r = max(0, obj_x_int - 3)
+            x2r = min(self.w, obj_x_int + 3)
 
-            # Normalize full depth map once
-            min_depth = np.min(self.depth_map)
-            max_depth = np.max(self.depth_map)
+            region = self.depth_map[y1r:y2r, x1r:x2r]
 
-            normalized_depth = (depth_value - min_depth) / (max_depth - min_depth + 1e-6)
+            if region.size == 0:
+                depth_value = self.depth_map[obj_y_int, obj_x_int]
+            else:
+                depth_value = np.mean(region)
 
-            # Closer objects → higher score
-            depth_score = 1 - normalized_depth
+            depth_score = 1.0 / (depth_value + 1e-6)
+            depth_score = depth_score / (depth_score + 1)
 
-            # ---------------------------------
-            # Ground-plane lateral projection
-            # ---------------------------------
-            pixel_offset = obj_x - (self.w / 2)
+            lateral_score = 1 - abs(obj_x - self.w/2) / (self.w/2)
+            lateral_score = max(0, lateral_score)
 
-            # approximate lateral displacement in 3D
-            ground_x = pixel_offset * depth_value
-
-            # normalize lateral displacement
-            lateral_score = 1 / (abs(ground_x) + 1e-6)
-
-            # normalize lateral score
-            lateral_score = lateral_score / (lateral_score + 1)
-
-            # Final combined geometric risk
             risk_score = 0.8 * depth_score + 0.2 * lateral_score
 
         direction, distance = self.compute_position(detection)
@@ -133,14 +122,6 @@ class SpatialReasoner:
             return []
 
         # Remove duplicates by label + direction
-        seen = set()
-        unique = []
+        unique = relevant
 
-        for det in relevant:
-            key = (det["label"], det["direction"])
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(det)
-
-        return unique[:2]
+        return unique
