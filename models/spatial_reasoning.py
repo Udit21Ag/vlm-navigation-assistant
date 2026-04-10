@@ -8,8 +8,8 @@ class SpatialReasoner:
     def compute_position(self, detection):
         x1, y1, x2, y2 = map(int, detection["bbox"])
 
-        center_x = (x1 + x2) / 2
-        bottom_y = y2
+        center_x = max(0, min((x1 + x2) / 2, self.w - 1))
+        bottom_y = max(0, min(y2, self.h - 1))
 
         if center_x < self.w * 0.2:
             direction = "far left"
@@ -65,8 +65,8 @@ class SpatialReasoner:
     def assign_risk(self, detection):
         x1, y1, x2, y2 = map(int, detection["bbox"])
 
-        obj_x = (x1 + x2) / 2
-        obj_y = y2
+        obj_x = max(0, min((x1 + x2) / 2, self.w - 1))
+        obj_y = max(0, min(y2, self.h - 1))
 
         fallback_depth_score = obj_y / self.h
         fallback_center_score = 1 - abs(obj_x - self.w/2) / (self.w/2)
@@ -102,6 +102,8 @@ class SpatialReasoner:
         detection["direction"] = direction
         detection["distance"] = distance
         detection["risk_score"] = float(risk_score)
+        # Raw MiDaS depth value — used by temporal reasoner for velocity
+        detection["raw_depth_value"] = float(depth_value) if self.depth_map is not None else 0.0
 
         return detection
 

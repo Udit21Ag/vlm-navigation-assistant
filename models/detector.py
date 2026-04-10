@@ -30,8 +30,4 @@ class ObjectDetector:
                 "confidence": conf
             })
 
-        print("Detected objects:")
-        for d in detections:
-            print(d["label"], d["confidence"])
-
         return detections

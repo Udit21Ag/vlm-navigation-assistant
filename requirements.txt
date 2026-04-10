@@ -23,3 +23,6 @@ tqdm
 
 # YAML config parsing
 pyyaml
+
+# Object tracking (DeepSORT)
+deep-sort-realtime
