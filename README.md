@@ -335,3 +335,17 @@ Real-world distance estimation
 Fine-tuned model on Indian Road Dataset (IDD)
 
 Enhanced visualization and Spatial reasoning
+
+
+## USAGE OF VIDEO INPUT FOR RUNNING THE PROJECT
+
+python3 main_video.py --source samples/video/sample.mp4
+
+python3 main_video.py --source samples/video/sample.mp4 --no-tts
+
+python3 main_video.py --source samples/video/sample.mp4 --interval 500
+
+python3 main_video.py --source samples/video/sample.mp4 --interval 500 --no-tts
+
+python3 main_video.py --source samples/video/sample.mp4 --interval 1000
+
