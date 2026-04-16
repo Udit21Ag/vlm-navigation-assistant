@@ -289,31 +289,6 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If you want the optional VLM caption refinement, set either an OpenRouter key or a Gemini key before running:
-
-```bash
-export OPENROUTER_API_KEY="your_api_key"
-# or
-export GEMINI_API_KEY="your_api_key"
-```
-
-You can also override the provider and model with:
-
-```bash
-export VLM_PROVIDER="openrouter"
-export OPENROUTER_MODEL="qwen/qwen2.5-vl-7b-instruct:free"
-```
-
-Supported settings include `VLM_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, and `VLM_TIMEOUT_SECONDS`.
-
-If a free OpenRouter vision model returns HTTP 429, the wrapper will try fallback models from `OPENROUTER_FALLBACK_MODELS` before dropping to the rule-based caption. Example:
-
-```bash
-export OPENROUTER_FALLBACK_MODELS="google/gemma-3-12b-it:free,qwen/qwen2.5-vl-7b-instruct:free"
-```
-
-The image path sends one VLM request per image. If you saw "free quota ended", that is usually the provider's quota, not too many requests from this app.
-
 ## 4. Download Model Weights
 
 Download the weights file:

@@ -45,15 +45,7 @@ class CorridorEstimator:
                 zone_scores["far left"] += 0.25
                 zone_scores["far right"] += 0.25
 
-        right_bias = {
-            "far right": 0,
-            "right": 1,
-            "center": 2,
-            "left": 3,
-            "far left": 4,
-        }
-
-        best_zone = min(zone_scores, key=lambda zone: (zone_scores[zone], right_bias.get(zone, 99)))
+        best_zone = min(zone_scores, key=zone_scores.get)
         return {
             "direction": best_zone,
             "score": zone_scores[best_zone],
