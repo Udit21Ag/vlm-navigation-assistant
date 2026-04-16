@@ -1,104 +1,153 @@
-"""
-Layer 5 — Navigation Decision Engine
-
-Rule-based planner that consumes the temporal scene graph and
-the cost map from SceneMemory to output a single navigation
-instruction per frame cycle.
-"""
-
+# Distance priority helper
+_DIST_ORDER = {
+    "very close": 0,
+    "near": 1,
+    "moderate distance": 2,
+    "far": 3,
+}
 
 class NavigationPlanner:
-    """Produces one navigation instruction from temporal objects + cost map."""
 
-    # Instruction constants — the smoothing layer uses these for comparison
     STOP       = "Stop immediately."
     MOVE_LEFT  = "Move left."
     MOVE_RIGHT = "Move right."
     EDGE_LEFT  = "Stay on the left edge."
     EDGE_RIGHT = "Stay on the right edge."
-    CAUTION    = "Proceed with caution. Obstacles on both sides."
+    CAUTION    = "Proceed with caution."
     FORWARD    = "Continue forward."
 
-    def decide(self, temporal_objects, cost_map, safest_zone):
-        """
-        Args:
-            temporal_objects: list from TemporalReasoner.update()
-            cost_map: dict {zone: cost} from SceneMemory.get_cost_map()
-            safest_zone: str from SceneMemory.get_safest_direction()
+    ROAD_THRESHOLD = 1.2
 
-        Returns:
-            (instruction_text: str, urgency: str)
-            urgency is one of "critical", "warning", "info"
-        """
+    def __init__(self, state=None):
+        self.state = state
+
+    def decide(self, temporal_objects, cost_map, safest_zone, corridor=None):
+
         if not temporal_objects:
             return self.FORWARD, "info"
 
-        # ------------------------------------------------------------------
-        # Rule 1 — Immediate hazard: very close + approaching
-        # ------------------------------------------------------------------
+        temporal_objects = sorted(
+            temporal_objects,
+            key=lambda o: (
+                _DIST_ORDER.get(o.get("distance", "far"), 3),
+                0 if o.get("motion", "stationary") == "approaching" else 1
+            )
+        )
+
+        # --------------------------------------------------------------
+        # Rule 1 — Immediate hazard
+        # --------------------------------------------------------------
         for obj in temporal_objects:
-            if (obj["distance"] == "very close"
-                    and obj["motion"] == "approaching"):
+            ttc = obj.get("ttc", float("inf"))
+
+            if ttc != float("inf") and ttc < 1.0:
                 return self.STOP, "critical"
 
-        # ------------------------------------------------------------------
-        # Rule 2 — Very close object (any motion)
-        # ------------------------------------------------------------------
+            if obj["distance"] == "very close" and obj["motion"] == "approaching":
+                return self.STOP, "critical"
+
+        # --------------------------------------------------------------
+        # Rule 2 — Very close object
+        # --------------------------------------------------------------
         for obj in temporal_objects:
             if obj["distance"] == "very close":
                 return self._avoid(obj, cost_map, safest_zone), "critical"
 
-        # ------------------------------------------------------------------
-        # Rule 3 — Center zone is blocked → suggest alternative
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
+        # Rule 3 — Center blocked
+        # --------------------------------------------------------------
         center_objects = [
             o for o in temporal_objects
             if o["zone"] == "center"
             and o["distance"] in ("very close", "near", "moderate distance")
         ]
         if center_objects:
-            return self._suggest_direction(cost_map, safest_zone), "warning"
+            # Count hazards on each side
+            left_risk = sum(
+                o["risk"] for o in temporal_objects
+                if o["zone"] in ("left", "far left")
+            )
 
-        # ------------------------------------------------------------------
-        # Rule 4 — Approaching objects from the side
-        # ------------------------------------------------------------------
-        approaching = [
-            o for o in temporal_objects
-            if o["motion"] == "approaching"
-            and o["distance"] in ("near", "moderate distance")
-        ]
-        if approaching:
-            obj = approaching[0]
-            return self._avoid(obj, cost_map, safest_zone), "warning"
+            right_risk = sum(
+                o["risk"] for o in temporal_objects
+                if o["zone"] in ("right", "far right")
+            )
 
-        # ------------------------------------------------------------------
-        # Rule 5 — Objects on both sides → caution
-        # ------------------------------------------------------------------
+            # Bias against traffic classes
+            def traffic_penalty(obj):
+                return 2.0 if obj["label"] in ["car", "motorcycle", "bus", "truck"] else 1.0
+
+            left_risk = sum(
+                o["risk"] * traffic_penalty(o)
+                for o in temporal_objects
+                if o["zone"] in ("left", "far left")
+            )
+
+            right_risk = sum(
+                o["risk"] * traffic_penalty(o)
+                for o in temporal_objects
+                if o["zone"] in ("right", "far right")
+            )
+
+            if left_risk > right_risk:
+                return self.MOVE_RIGHT, "warning"
+            else:
+                return self.MOVE_LEFT, "warning"
+
+        # --------------------------------------------------------------
+        # Rule 4 — Approaching objects
+        # --------------------------------------------------------------
+        for obj in temporal_objects:
+            if obj["motion"] == "approaching" and obj["distance"] in ("near", "moderate distance"):
+                return self._avoid(obj, cost_map, safest_zone), "warning"
+
+        # --------------------------------------------------------------
+        # Rule 5 — Both sides blocked
+        # --------------------------------------------------------------
         left_zones  = {"left", "far left"}
         right_zones = {"right", "far right"}
-        active_zones = {o["zone"] for o in temporal_objects
-                        if o["distance"] in ("very close", "near", "moderate distance")}
-        has_left  = bool(active_zones & left_zones)
-        has_right = bool(active_zones & right_zones)
-        if has_left and has_right:
-            return self.CAUTION, "warning"
 
-        # ------------------------------------------------------------------
-        # Rule 6 — Road zone penalty (static prior)
-        # ------------------------------------------------------------------
-        if cost_map.get("center", 0) > 1.2:
-            return self._suggest_direction(cost_map, safest_zone), "info"
+        active_zones = {
+            o["zone"] for o in temporal_objects
+            if o["distance"] in ("very close", "near", "moderate distance")
+        }
 
-        # ------------------------------------------------------------------
-        # Default — path appears clear
-        # ------------------------------------------------------------------
+        if (active_zones & left_zones) and (active_zones & right_zones):
+            return self._suggest_direction(cost_map, safest_zone), "warning"
+
+        # --------------------------------------------------------------
+        # Rule 6 — Road penalty
+        # --------------------------------------------------------------
+        if cost_map.get("center", 0) > self.ROAD_THRESHOLD:
+            if safest_zone in ("left", "far left"):
+                return self.EDGE_LEFT, "info"
+            elif safest_zone in ("right", "far right"):
+                return self.EDGE_RIGHT, "info"
+            else:
+                return self._suggest_direction(cost_map, safest_zone), "info"
+
+        if corridor:
+            direction = corridor.get("direction", "center")
+
+            if direction == "far left":
+                instruction = self.EDGE_LEFT
+            elif direction == "left":
+                instruction = self.MOVE_LEFT
+            elif direction == "center":
+                instruction = self.FORWARD
+            elif direction == "right":
+                instruction = self.MOVE_RIGHT
+            elif direction == "far right":
+                instruction = self.EDGE_RIGHT
+            else:
+                instruction = self.FORWARD
+
+            return instruction, "info"
+
         return self.FORWARD, "info"
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------
     def _avoid(self, obj, cost_map, safest_zone):
-        """Generate an avoidance instruction away from the object's zone."""
         zone = obj.get("zone", "center")
 
         if zone in ("left", "far left"):
@@ -106,22 +155,18 @@ class NavigationPlanner:
         elif zone in ("right", "far right"):
             return self.MOVE_LEFT
         else:
-            # Object in center — pick the cheapest side
             return self._suggest_direction(cost_map, safest_zone)
 
+    # --------------------------------------------------------------
     @staticmethod
     def _suggest_direction(cost_map, safest_zone):
-        """Pick a direction instruction based on the safest zone."""
-        if safest_zone in ("far left", "left"):
+
+        if safest_zone in ("left", "far left"):
             return NavigationPlanner.MOVE_LEFT
-        elif safest_zone in ("far right", "right"):
+        elif safest_zone in ("right", "far right"):
             return NavigationPlanner.MOVE_RIGHT
         else:
-            # Both sides roughly equal — default to right (Indian roads:
-            # pedestrians usually walk on the left-facing-traffic side,
-            # but we keep it generic)
             left_cost = cost_map.get("left", 1) + cost_map.get("far left", 1)
             right_cost = cost_map.get("right", 1) + cost_map.get("far right", 1)
-            if left_cost <= right_cost:
-                return NavigationPlanner.MOVE_LEFT
-            return NavigationPlanner.MOVE_RIGHT
+
+            return NavigationPlanner.MOVE_LEFT if left_cost < right_cost else NavigationPlanner.MOVE_RIGHT

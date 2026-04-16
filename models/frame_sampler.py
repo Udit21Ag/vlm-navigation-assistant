@@ -1,14 +1,3 @@
-"""
-Layer 1 — Video Input & Frame Sampling
-
-Captures frames from a video source (webcam or file) and samples
-one frame every `sample_interval_ms` milliseconds.  Maintains a
-sliding buffer of the last N sampled frames for temporal modules.
-
-For VIDEO FILES  → uses video-time–based seeking (CAP_PROP_POS_MSEC)
-For WEBCAM/LIVE  → uses wall-clock timing
-"""
-
 import cv2
 import time
 from collections import deque
@@ -34,6 +23,7 @@ class FrameSampler:
         self._cap = None
         self._last_sample_time = 0.0
         self._is_file = isinstance(source, str)
+        self.last_frame_meta = {}
 
     # ------------------------------------------------------------------
     # Context-manager support so callers can use `with FrameSampler(…):`
@@ -75,6 +65,9 @@ class FrameSampler:
             self._cap.release()
             self._cap = None
 
+    def set_interval(self, sample_interval_ms):
+        self.sample_interval_ms = max(1, int(sample_interval_ms))
+
     @property
     def fps(self):
         """Frames-per-second reported by the capture device."""
@@ -105,18 +98,19 @@ class FrameSampler:
         next_sample_ms = 0.0
 
         while True:
-            # Seek to the next target position in the video
             self._cap.set(cv2.CAP_PROP_POS_MSEC, next_sample_ms)
             ret, frame = self._cap.read()
             if not ret:
                 break
 
-            # Record the actual position we landed on
             actual_ms = self._cap.get(cv2.CAP_PROP_POS_MSEC)
             next_sample_ms = actual_ms + self.sample_interval_ms
 
+            frame = cv2.resize(frame, (640, 384))
+
             now = time.monotonic()
             self.buffer.append((frame, now))
+            self.last_frame_meta = {"timestamp": now, "source": "file"}
 
             yield frame, now
 
@@ -137,9 +131,16 @@ class FrameSampler:
             elapsed_ms = (now - self._last_sample_time) * 1000
 
             if elapsed_ms < self.sample_interval_ms:
-                continue  # skip — too soon
+                continue
 
             self._last_sample_time = now
+
+            frame = cv2.resize(frame, (640, 384))
             self.buffer.append((frame, now))
+            self.last_frame_meta = {"timestamp": now, "source": "realtime"}
 
             yield frame, now
+
+            # Optional clean exit
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break

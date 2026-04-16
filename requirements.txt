@@ -26,3 +26,5 @@ pyyaml
 
 # Object tracking (DeepSORT)
 deep-sort-realtime
+
+google-generativeai

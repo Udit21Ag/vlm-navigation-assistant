@@ -23,6 +23,7 @@ This project builds a system that answers those questions using:
 # System Architecture
 
 The navigation system processes an image using the following pipeline:
+
 ```
 Input Image
 │
@@ -48,37 +49,43 @@ Input Image
 Object detection is performed using **YOLOv8 (You Only Look Once)**.
 
 ### Model Used
+
 - `YOLOv8n` (default lightweight model)
 - Later fine-tuned on **IDD (Indian Driving Dataset)**
 
 ### YOLOv8 Architecture
+
 YOLOv8 consists of:
 
 1. **Backbone**
-   - CSPDarknet-style convolution layers
-   - Extracts hierarchical image features
+    - CSPDarknet-style convolution layers
+    - Extracts hierarchical image features
 
 2. **Neck**
-   - PAN-FPN feature pyramid
-   - Combines multi-scale features
+    - PAN-FPN feature pyramid
+    - Combines multi-scale features
 
 3. **Detection Head**
-   - Anchor-free object detection
-   - Predicts bounding box, class, confidence
+    - Anchor-free object detection
+    - Predicts bounding box, class, confidence
 
 ### Training Dataset
+
 Default model is trained on **COCO dataset**
 
 COCO contains:
+
 - 118k training images
 - 80 object categories
 
 Examples:
+
 ```
 person, car, truck, bus, motorcycle, bicycle
 ```
 
 ### Detection Output
+
 Each detected object contains:
 
 ```
@@ -98,6 +105,7 @@ Depth estimation uses **MiDaS**, a monocular depth estimation model.
 Unlike stereo cameras, MiDaS estimates **depth from a single image**.
 
 ### Model Used
+
 ```
 dpt_levit_224
 ```
@@ -202,15 +210,19 @@ This project instead generates **actionable navigation cues**.
 Key innovations:
 
 ### 1. Vision-to-Navigation pipeline
+
 Transforms detection outputs into **movement guidance**.
 
 ### 2. Depth-aware risk prioritization
+
 Uses **3D depth information** instead of only 2D bounding boxes.
 
 ### 3. Hazard prioritization
+
 Focuses on **relevant obstacles** rather than all detected objects.
 
 ### 4. Indian street adaptation
+
 Supports classes like:
 
 ```
@@ -265,15 +277,42 @@ cd vlm-navigation-assistant
 ```
 
 ## 2. Create Virtual Environment
+
 ```bash
 python -m venv venv
 source venv/bin/activate
 ```
 
 ## 3. Install Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
+
+If you want the optional VLM caption refinement, set either an OpenRouter key or a Gemini key before running:
+
+```bash
+export OPENROUTER_API_KEY="your_api_key"
+# or
+export GEMINI_API_KEY="your_api_key"
+```
+
+You can also override the provider and model with:
+
+```bash
+export VLM_PROVIDER="openrouter"
+export OPENROUTER_MODEL="qwen/qwen2.5-vl-7b-instruct:free"
+```
+
+Supported settings include `VLM_PROVIDER`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, and `VLM_TIMEOUT_SECONDS`.
+
+If a free OpenRouter vision model returns HTTP 429, the wrapper will try fallback models from `OPENROUTER_FALLBACK_MODELS` before dropping to the rule-based caption. Example:
+
+```bash
+export OPENROUTER_FALLBACK_MODELS="google/gemma-3-12b-it:free,qwen/qwen2.5-vl-7b-instruct:free"
+```
+
+The image path sends one VLM request per image. If you saw "free quota ended", that is usually the provider's quota, not too many requests from this app.
 
 ## 4. Download Model Weights
 
@@ -281,6 +320,7 @@ Download the weights file:
 [Download Model_v1.0 weights](https://github.com/Udit21Ag/vlm-navigation-assistant/releases/download/v1.0/idd_best.pt)
 
 Add the file in the project directory as:
+
 ```bash
 vlm-navigation-assistant
 │
@@ -290,35 +330,45 @@ vlm-navigation-assistant
 ...
 ```
 
-
 ## 5. Install MiDaS
 
 Clone the MiDaS repository:
+
 ```bash
 git clone https://github.com/isl-org/MiDaS.git
 ```
 
 Download model weights:
+
 ```
 https://github.com/isl-org/MiDaS/releases/download/v3_1/dpt_levit_224.pt
 ```
+
 Place file inside:
+
 ```
 MiDaS/weights/
 ```
 
 ## 6. Run the Navigation System
+
 ```bash
 python main.py --image samples/road.jpg
 ```
+
 Example output:
+
 ```
 Generated: car near ahead. motorcycle on your left.
 ```
+
 The system will also save a visualization:
+
 ```
 outputs/road_boxed.jpg
 ```
+
+The navigation pipeline works without the VLM, but the Gemini Flash API can refine captions when the key is available.
 
 # Future Improvements
 
@@ -336,7 +386,6 @@ Fine-tuned model on Indian Road Dataset (IDD)
 
 Enhanced visualization and Spatial reasoning
 
-
 ## USAGE OF VIDEO INPUT FOR RUNNING THE PROJECT
 
 python3 main_video.py --source samples/video/sample.mp4
@@ -348,4 +397,3 @@ python3 main_video.py --source samples/video/sample.mp4 --interval 500
 python3 main_video.py --source samples/video/sample.mp4 --interval 500 --no-tts
 
 python3 main_video.py --source samples/video/sample.mp4 --interval 1000
-
