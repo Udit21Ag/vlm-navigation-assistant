@@ -97,20 +97,26 @@ git clone https://github.com/<your-username>/vlm-navigation-assistant.git
 cd vlm-navigation-assistant
 ```
 
-**2. Create Virtual Environment**
+**2. Clone MiDaS Repository (required)**
+
+```bash
+git clone https://github.com/isl-org/MiDaS.git
+```
+
+**3. Create Virtual Environment**
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 ```
 
-**3. Install Dependencies**
+**4. Install Dependencies**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**4. Download Model Weights**
+**5. Download Model Weights**
 
 YOLOv8-IDD weights:
 
