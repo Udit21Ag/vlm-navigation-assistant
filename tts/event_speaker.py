@@ -1,3 +1,23 @@
+"""Text-to-Speech Module - Non-Blocking Audio Output
+
+Speaks navigation instructions asynchronously using platform-native TTS:
+- macOS: native `say` command
+- Linux/Windows: pyttsx3 library
+
+Features:
+- Non-blocking async processing (uses worker thread)
+- Deduplication (same instruction won't repeat within cooldown)
+- Instruction-change detection (smart TTS gating)
+- Passive instruction filtering (\"Continue forward\" gated in normal mode)
+- Queue management (prevents audio pile-up)
+
+TTS Gating Rules:
+- Critical urgency: Always speak (0.4s cooldown)
+- Non-passive + changed: Speak if > 0.6s since last
+- Other: Speak if > 2s since last and changed
+- Passive in info mode: Never speaks (suppressed)
+"""
+
 import platform
 import subprocess
 import threading
@@ -32,6 +52,7 @@ class EventSpeaker:
         elapsed = now - self._last_spoken_time
         cooldown_ok = elapsed >= self._cooldown
         critical_cooldown = elapsed >= max(0.4, self._cooldown * 0.25)
+        quick_change_ok = elapsed >= 0.6
 
         is_passive = "continue" in text.lower()  # FIXED
 
@@ -39,7 +60,7 @@ class EventSpeaker:
 
         if urgency == "critical":
             should_speak = critical_cooldown
-        elif changed and cooldown_ok:
+        elif changed and (cooldown_ok or (not is_passive and quick_change_ok)):
             should_speak = True
         elif cooldown_ok and not is_passive:
             should_speak = True
@@ -110,11 +131,14 @@ class EventSpeaker:
     # Cleanup
     # -------------------------------
     def shutdown(self):
-        try:
-            self._queue.get_nowait()
-        except queue.Empty:
-            pass
+        # Drain any pending utterances so stale guidance is not spoken after loop end.
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
 
+        # Allow in-flight speech to finish naturally when possible.
         self._queue.put(None)
         self._thread.join(timeout=5)
         self._kill_current()

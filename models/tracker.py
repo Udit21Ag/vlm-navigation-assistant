@@ -1,3 +1,15 @@
+"""Object Tracking Module
+
+Tracks detected objects across multiple frames using DeepSORT algorithm.
+Maintains consistent track IDs and motion vectors.
+
+Features:
+- Frame-to-frame object matching
+- Track ID persistence
+- Motion vector computation
+- Handles track creation/deletion with configurable timeouts
+"""
+
 from dataclasses import dataclass
 
 

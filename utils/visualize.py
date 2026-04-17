@@ -1,3 +1,9 @@
+"""Visualization Utilities
+
+Draws object detections and spatial information on video frames.
+Includes bounding boxes, class labels, and spatial tags (direction + distance).
+"""
+
 import cv2
 
 def visualize_depth(depth_map):

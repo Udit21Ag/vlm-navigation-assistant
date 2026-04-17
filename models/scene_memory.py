@@ -1,3 +1,16 @@
+"""Scene Memory & Memory Management Module
+
+Maintains temporal state of hazards across frames using exponential decay.
+Generates cost maps for navigation planning.
+
+Features:
+- Zone-based cost accumulation (5 zones: far-left, left, center, right, far-right)
+- Exponential decay of stale hazards (prevents persistent false alarms)
+- Dynamic cost computation (combines static baseline + dynamic hazards)
+- Occupancy grid for spatial probability mapping
+- Corridor detection for safe navigation paths
+"""
+
 import time
 import math
 

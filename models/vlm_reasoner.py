@@ -1,212 +1,99 @@
-import base64
-import json
 import os
-from urllib import error, request
-import urllib
-from PIL import Image
+import torch
+import numpy as np
 import cv2
-import google.generativeai as genai
-
 
 class VLMReasoner:
-    def __init__(self, model_name=None):
+    """
+    BLIP VQA Checker: Validates spatial descriptions against actual image content.
+    
+    Purpose: Verify that the temporal caption accurately describes the scene
+    Uses lightweight BLIP VQA model as a validator (not generator)
+    """
 
-        self.timeout_seconds = float(os.getenv("VLM_TIMEOUT_SECONDS", "10"))
-        self.provider = os.getenv("VLM_PROVIDER", "").strip().lower()
+    def __init__(self, model_name="blip-vqa"):
+        self.model_name = model_name
         self.available = False
-        self.model = None
-
-        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        openrouter_key = os.getenv("OPENROUTER_API_KEY")
-
-        if not self.provider:
-            self.provider = "openrouter" if openrouter_key else "gemini" if gemini_key else "off"
-
+        
         try:
-            if self.provider == "openrouter":
-                self.api_key = openrouter_key
-                self.model_name = model_name or os.getenv(
-                    "OPENROUTER_MODEL",
-                    "qwen/qwen2.5-vl-7b-instruct:free",
-                )
-                self.api_url = os.getenv(
-                    "OPENROUTER_API_URL",
-                    "https://openrouter.ai/api/v1/chat/completions",
-                )
-                self.http_referer = os.getenv("OPENROUTER_HTTP_REFERER", "http://localhost")
-                self.app_title = os.getenv("OPENROUTER_APP_TITLE", "dl-navigation-assistant")
-
-                if not self.api_key:
-                    raise RuntimeError("Missing OPENROUTER_API_KEY")
-
-                self.available = True
-                print(f"[VLM] Using OpenRouter ({self.model_name}).")
-
-            elif self.provider == "gemini":
-                self.api_key = gemini_key
-                self.model_name = model_name or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
-
-                if not self.api_key:
-                    raise RuntimeError("Missing GEMINI_API_KEY (or GOOGLE_API_KEY)")
-
-                genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel(self.model_name)
-                self.available = True
-
-                print(f"[VLM] Using Gemini API ({self.model_name}).")
-
-            else:
-                self.model_name = model_name or "off"
-                print("[VLM] Disabled by configuration.")
-
-        except Exception as exc:
-            print(f"[VLM] Disabled: {exc}")
-
-    # ------------------------------------------------------
-    # Build prompt from YOUR pipeline outputs
-    # ------------------------------------------------------
-    def _build_prompt(self, temporal_objects, instruction):
-
-        if not temporal_objects:
-            scene_desc = "No major obstacles."
-        else:
-            parts = []
-            for obj in temporal_objects[:3]:  # 🔥 limit for speed
-                label = obj.get("label", "object")
-                zone = obj.get("zone", "center")
-                motion = obj.get("motion", "stationary")
-                parts.append(f"{label} {motion} in {zone}")
-
-            scene_desc = ", ".join(parts)
-
-        return (
-            "You are helping a visually impaired person navigate safely.\n"
-            f"Observed scene: {scene_desc}.\n"
-            f"Current navigation suggestion: {instruction}.\n"
-            "Generate one short, clear navigation instruction.\n"
-            "Mention the safest direction.\n"
-            "Keep the answer under 10 words."
-        )
-
-    # ------------------------------------------------------
-    # Fallback (VERY IMPORTANT)
-    # ------------------------------------------------------
-    def _fallback_caption(self, instruction, temporal_objects):
-
-        if not temporal_objects:
-            return instruction
-
-        top = temporal_objects[0]
-        label = top.get("label", "object")
-        zone = top.get("zone", "center")
-        motion = top.get("motion", "stationary")
-
-        if motion == "approaching":
-            return f"{instruction}. {label} approaching from {zone}."
-        return f"{instruction}. {label} detected on the {zone}."
-
-    def _prepare_image_data_url(self, frame):
-        ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-        if not ok:
-            raise RuntimeError("Failed to encode frame for VLM request")
-
-        encoded = base64.b64encode(buffer.tobytes()).decode("utf-8")
-        return f"data:image/jpeg;base64,{encoded}"
-
-    def _build_generation_config(self):
-        return {
-            "temperature": 0.1,
-            "top_p": 0.8,
-            "top_k": 16,
-            "max_output_tokens": 32,
-        }
-
-    def _call_openrouter(self, frame, prompt):
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": self._prepare_image_data_url(frame)
-                            }
-                        }
-                    ]
-                }
-            ],
-            "temperature": 0.1,
-            "top_p": 0.8,
-            "max_tokens": 32,
-        }
-
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost",
-                "X-Title": "LowVisionNavigation"
-            }
-        )
-
-        with request.urlopen(req, timeout=self.timeout_seconds) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-
-        choices = data.get("choices", [])
-        if not choices:
-            return ""
-
-        message = choices[0].get("message", {})
-        content = message.get("content", "")
-        if isinstance(content, list):
-            content = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
-
-        return str(content).strip()
-
-    # ------------------------------------------------------
-    # Main inference
-    # ------------------------------------------------------
-    def generate(self, frame, temporal_objects, instruction):
-
-        # 🔥 If model failed → fallback
+            from transformers import BlipProcessor, BlipForQuestionAnswering
+            
+            print("[VLM] Loading BLIP VQA for validation...")
+            
+            self.processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
+            self.model = BlipForQuestionAnswering.from_pretrained("Salesforce/blip-vqa-base")
+            
+            # Move to GPU if available
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.model = self.model.to(device)
+            self.device = device
+            
+            self.available = True
+            print(f"[VLM] BLIP VQA loaded successfully (device: {device})")
+            
+        except Exception as e:
+            print(f"[VLM] Failed to load BLIP VQA: {e}")
+            self.available = False
+    
+    def generate(self, frame, temporal_caption, instruction, temporal_objects=None):
+        """
+        Validate temporal caption using BLIP VQA as a checker.
+        Focuses on detecting missed hazards rather than strict validation.
+        
+        Args:
+            frame: Input image (numpy array)
+            temporal_caption: Generated temporal caption
+            instruction: Navigation direction (e.g., "Move right.")
+            temporal_objects: List of detected objects (unused)
+            
+        Returns:
+            temporal_caption (with BLIP hazard verification)
+        """
+        
         if not self.available:
-            return self._fallback_caption(instruction, temporal_objects)
-
+            return temporal_caption
+        
         try:
-            prompt = self._build_prompt(temporal_objects, instruction)
-
-            if self.provider == "openrouter":
-                text = self._call_openrouter(frame, prompt)
+            # Convert BGR to RGB for transformers
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # ============================================================
+            # PRIMARY: Ask what objects/hazards are in the scene
+            # ============================================================
+            hazard_question = "What are the main hazards or obstacles in this street scene?"
+            
+            inputs = self.processor(rgb_frame, hazard_question, return_tensors="pt").to(self.device)
+            
+            with torch.no_grad():
+                outputs = self.model.generate(**inputs, max_length=30)
+            
+            vlm_hazards = self.processor.decode(outputs[0], skip_special_tokens=True).strip().lower()
+            
+            print(f"[VLM] Temporal Caption: '{temporal_caption}'")
+            print(f"[VLM] BLIP Sees: '{vlm_hazards}'")
+            
+            # ============================================================
+            # Check for agreement
+            # ============================================================
+            temporal_lower = temporal_caption.lower()
+            
+            # Extract key phrases from both
+            key_words = ["autorickshaw", "motorcycle", "car", "bus", "truck", "person", 
+                        "vehicle", "obstacle", "hazard", "left", "right", "ahead", "forward"]
+            
+            temporal_keys = [w for w in key_words if w in temporal_lower]
+            vlm_keys = [w for w in key_words if w in vlm_hazards]
+            
+            overlap = len(set(temporal_keys) & set(vlm_keys))
+            
+            if overlap >= 2 or len(temporal_keys) == 0:
+                print(f"[VLM] ✓ Hazard agreement confirmed")
             else:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(rgb)
-
-                response = self.model.generate_content(
-                    [prompt, image],
-                    generation_config=self._build_generation_config(),
-                    request_options={"timeout": self.timeout_seconds},
-                )
-                text = (response.text or "").strip()
-
-            if not text:
-                return self._fallback_caption(instruction, temporal_objects)
-
-            text = text.replace("ASSISTANT:", "").strip()
-
-            if len(text) > 180:
-                text = text[:180].rsplit(" ", 1)[0].strip()
-
-            return text
-
-        except (error.URLError, error.HTTPError, TimeoutError, Exception) as e:
-            print("[VLM ERROR]", e)
-            return self._fallback_caption(instruction, temporal_objects)
+                print(f"[VLM] ⚠ Potential mismatch: Temporal={temporal_keys}, VLM={vlm_keys}")
+            
+            # Return temporal caption (it's already well-structured)
+            return temporal_caption
+            
+        except Exception as e:
+            print(f"[VLM] Validation error: {e}")
+            return temporal_caption

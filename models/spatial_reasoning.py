@@ -1,4 +1,19 @@
+"""Spatial Reasoning Module
+
+Converts object detections into navigational information by classifying:
+- Direction (left/center/right zones)
+- Distance (very close/near/moderate/far with FOV-aware adaptive thresholds)
+- Risk scores (combining depth, size, and vertical position)
+- Object motion (approaching/crossing/receding/stationary)
+
+Key Features:
+- FOV-aware distance binning based on vertical position
+- Size-adjusted risk scoring
+- Automatic motion classification
+"""
+
 import numpy as np
+
 class SpatialReasoner:
     def __init__(self, image_width, image_height, depth_map=None):
         self.w = image_width
@@ -27,7 +42,8 @@ class SpatialReasoner:
             direction = "far right"
 
         # ----------------------------------------------------------
-        # Depth-based distance (normalized MiDaS depth: 0–1)
+        # Adaptive distance based on depth + vertical position (FOV)
+        # Objects lower in frame are closer; use larger "near" bin
         # ----------------------------------------------------------
         if self.depth_map is not None:
 
@@ -44,13 +60,39 @@ class SpatialReasoner:
                 depth_value = np.median(region)
 
             # 🔥 FIX: use normalized depth directly
-                depth_score = float(np.clip(depth_value, 0.0, 1.0))
-
-            if depth_score > 0.7:
+            depth_score = float(np.clip(depth_value, 0.0, 1.0))
+            
+            # 🔥 NEW: Combine depth + size for FOV-aware distance classification
+            # Large objects in lower frame are likely "near" even with modest depth
+            bbox_width = x2 - x1
+            bbox_height = y2 - y1
+            bbox_area = bbox_width * bbox_height
+            normalized_area = bbox_area / (self.w * self.h)
+            
+            # Vertical position: 0 = top (far), 1 = bottom (close)
+            vertical_ratio = bottom_y / self.h
+            
+            # Size boost: large objects get bonus (+0 to +0.30)
+            # Normalized area of 0.04 (4% of image) gets max boost
+            size_boost = min(normalized_area / 0.04, 0.30)
+            
+            # Position boost: lower in frame gets bonus (+0 to +0.20)
+            # Apply from middle onward
+            vertical_boost = max(0, (vertical_ratio - 0.4) * 0.4)
+            
+            # Combined score: depth + visual cues
+            combined_score = depth_score + size_boost + vertical_boost
+            
+            # Adaptive thresholds (more generous to account for FOV geometry)
+            very_close_threshold = 0.5 + (0.2 * vertical_ratio)  # 0.50-0.70
+            near_threshold = 0.35 + (0.2 * vertical_ratio)        # 0.35-0.55
+            moderate_threshold = 0.15 + (0.2 * vertical_ratio)    # 0.15-0.35
+            
+            if combined_score > very_close_threshold:
                 distance = "very close"
-            elif depth_score > 0.5:
+            elif combined_score > near_threshold:
                 distance = "near"
-            elif depth_score > 0.3:
+            elif combined_score > moderate_threshold:
                 distance = "moderate distance"
             else:
                 distance = "far"
@@ -148,5 +190,14 @@ class SpatialReasoner:
             det for det in enriched
             if det["distance"] in ["very close", "near", "moderate distance"]
         ]
+
+        # If no close hazards, include the nearest far hazard (by depth, not risk)
+        if not relevant and enriched:
+            # Find the closest "far" hazard by actual depth value (higher = closer)
+            far_hazards = [det for det in enriched if det["distance"] == "far"]
+            if far_hazards:
+                # Sort by raw_depth_value descending (highest = closest under "far" category)
+                closest_far = max(far_hazards, key=lambda x: x.get("raw_depth_value", 0.0))
+                relevant.append(closest_far)
 
         return relevant

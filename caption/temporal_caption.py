@@ -1,14 +1,28 @@
-from collections import deque, Counter, defaultdict
+"""Temporal Caption Generation Module
 
+Generates natural language navigation captions from temporal object detections.
+
+Features:
+- Hazard grouping (same type + location merged to avoid redundancy)
+- Temporal smoothing (3-frame voting to prevent flicker)
+- Prioritization (closer/more urgent hazards listed first)
+- Multi-line text wrapping support
+- Maximum description limit (configurable, default 5)
+
+Caption format: "<hazard1>. <hazard2>. <instruction>."
+Example: "Car near ahead. Motorcycle on your left. Stay on the left edge."
+"""
+
+from collections import deque, Counter, defaultdict
 
 class TemporalCaptionGenerator:
     """Generates smoothed, temporal-aware captions."""
 
-    def __init__(self, smoothing_window=3, max_descriptions=2):
+    def __init__(self, smoothing_window=3, max_descriptions=5):
         """
         Args:
             smoothing_window: Number of recent instructions used for smoothing.
-            max_descriptions: Maximum number of object descriptions.
+            max_descriptions: Maximum number of object descriptions (increased for better spatial awareness).
         """
         self._recent_instructions = deque(maxlen=smoothing_window)
         self._max_descriptions = max_descriptions
@@ -26,9 +40,19 @@ class TemporalCaptionGenerator:
         # --- Smooth instruction first ---
         smoothed = self._smooth(instruction, urgency)
 
-        # --- Skip verbose description for passive navigation ---
+        # --- For "continue forward" with no close hazards, skip verbose description ---
+        # But still include far hazards for awareness
         if "continue" in smoothed.lower():
-            return smoothed, smoothed
+            far_only = all(o.get("distance") == "far" for o in temporal_objects)
+            if not temporal_objects or far_only:
+                # If there are far hazards, mention only the most critical one
+                if far_only and temporal_objects:
+                    scene_parts = self._describe_scene(temporal_objects)
+                    if scene_parts:
+                        # Remove trailing period from scene description to avoid double periods
+                        scene_desc = scene_parts[0].rstrip(".")
+                        return smoothed, f"{scene_desc}. {smoothed}"
+                return smoothed, smoothed
 
         # --- Build scene description ---
         scene_parts = self._describe_scene(temporal_objects)

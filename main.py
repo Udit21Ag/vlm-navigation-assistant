@@ -1,3 +1,16 @@
+"""
+Vision-Based Navigation Assistant - Main Entry Point
+
+Processes images or video streams to generate navigation guidance for visually
+impaired users. Combines object detection, depth estimation, spatial reasoning,
+and rule-based navigation planning.
+
+Usage:
+    python main.py --image samples/road.jpg
+    python main.py --source samples/vid.mp4
+    python main.py --source samples/vid.mp4 --no-tts
+"""
+
 import argparse
 import os
 import time
@@ -16,29 +29,70 @@ from models.metrics import RuntimeMetrics
 from caption.temporal_caption import TemporalCaptionGenerator
 from tts.event_speaker import EventSpeaker
 from utils.visualize import draw_boxes
-# from models.vlm_reasoner import VLMReasoner
+from models.vlm_reasoner import VLMReasoner
 
 # ─────────────────────────────────────────────────────────────
 # Overlay functions
 # ─────────────────────────────────────────────────────────────
+def _wrap_text(text, max_width, font, font_scale, thickness):
+    """Wrap text to fit within max_width pixels."""
+    words = text.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        test_line = " ".join(current_line + [word])
+        (text_width, _), _ = cv2.getTextSize(test_line, font, font_scale, thickness)
+        
+        if text_width > max_width and current_line:
+            lines.append(" ".join(current_line))
+            current_line = [word]
+        else:
+            current_line.append(word)
+    
+    if current_line:
+        lines.append(" ".join(current_line))
+    
+    return lines
+
+
 def _overlay_instruction(frame, caption, urgency):
     h, w = frame.shape[:2]
-
+    
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.6
+    thickness = 2
+    line_height = 25
+    padding = 10
+    max_text_width = w - 20  # Leave 10px margin on each side
+    
+    # Wrap text
+    lines = _wrap_text(caption, max_text_width, font, font_scale, thickness)
+    
+    # Calculate rectangle height based on number of lines
+    rect_height = len(lines) * line_height + 2 * padding
+    
+    # Draw semi-transparent overlay rectangle
     overlay = frame.copy()
     color = {
         "critical": (0, 0, 200),
         "warning":  (0, 140, 255),
         "info":     (80, 80, 80),
     }.get(urgency, (80, 80, 80))
-
-    cv2.rectangle(overlay, (0, h - 50), (w, h), color, -1)
+    
+    cv2.rectangle(overlay, (0, h - rect_height), (w, h), color, -1)
     cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-
-    cv2.putText(
-        frame, caption,
-        (10, h - 15),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
-    )
+    
+    # Draw wrapped text lines
+    y_pos = h - rect_height + padding + 15  # Vertical position of first line
+    for line in lines:
+        cv2.putText(
+            frame, line,
+            (10, y_pos),
+            font, font_scale, (255, 255, 255), thickness
+        )
+        y_pos += line_height
+    
     return frame
 
 
@@ -74,9 +128,8 @@ def run_image(image_path, use_tts=True):
     memory = SceneMemory()
     planner = NavigationPlanner()
     captioner = TemporalCaptionGenerator()
+    vlm = VLMReasoner()
     speaker = EventSpeaker() if use_tts else None
-    # VLM disabled: keep code commented for future use.
-    # vlm = VLMReasoner()
 
     frame = cv2.imread(image_path)
     if frame is None:
@@ -102,28 +155,27 @@ def run_image(image_path, use_tts=True):
         "risk": d["risk_score"],
     } for d in enriched]
 
-    # Simple cost logic
-    cost_map = {
-        "far left": 0.1,
-        "left": 0.2,
-        "center": 0.9,
-        "right": 0.3,
-        "far right": 0.2,
-    }
-
-    safest = min(cost_map, key=cost_map.get)
+    # Update memory with temporal objects to compute actual cost map
+    memory.update(temporal_objects)
+    cost_map = memory.get_cost_map()
+    safest = memory.get_safest_direction()
 
     instruction, urgency = planner.decide(
         temporal_objects, cost_map, safest, memory.get_best_corridor()
     )
 
-    # VLM disabled: use temporal caption pipeline directly.
-    _, full_caption = captioner.generate(
+    # Generate temporal caption first (good grouping, prioritization, conciseness)
+    _, temporal_caption = captioner.generate(
         temporal_objects, instruction, urgency
     )
 
+    # Refine temporal caption with VLM visual grounding
+    full_caption = vlm.generate(frame, temporal_caption, instruction)
+
+    print(f"output -> {full_caption}")
+
     if speaker:
-        speaker.speak(instruction, urgency)
+        speaker.speak(full_caption, urgency)
 
     vis = draw_boxes(frame.copy(), enriched_all)
     vis = _overlay_instruction(vis, full_caption, urgency)
@@ -162,8 +214,6 @@ def run(source, use_tts=True, sample_interval_ms=300):
     temporal = TemporalReasoner()
     memory = SceneMemory()
     planner = NavigationPlanner()
-    # VLM disabled: keep code commented for future use.
-    # vlm = VLMReasoner()
     captioner = TemporalCaptionGenerator()
     speaker = EventSpeaker() if use_tts else None
     metrics = RuntimeMetrics()
@@ -225,6 +275,9 @@ def run(source, use_tts=True, sample_interval_ms=300):
     detect_future = None
     depth_future = None
     adaptive_interval = sample_interval_ms
+    has_seen_hazard = False
+    last_smoothed_instruction = ""
+    instruction_streak = 0
 
     with FrameSampler(source, sample_interval_ms=sample_interval_ms) as sampler:
 
@@ -254,21 +307,18 @@ def run(source, use_tts=True, sample_interval_ms=300):
 
             detections = prev_detections
 
-            if not detections:
-                continue
-
-            if depth_map is None:
-                depth_map = depth_estimator.estimate_depth(small)  # fallback
-
-            # Spatial
+            # Initialize depth and reasoner on first frame (don't wait for detections)
             if reasoner is None:
+                if depth_map is None:
+                    depth_map = depth_estimator.estimate_depth(small)
                 reasoner = SpatialReasoner(w_s, h_s, depth_map)
-            else:
+            
+            # Update depth map for reasoner if available
+            if depth_map is not None:
                 reasoner.depth_map = depth_map
 
-            
-
-            enriched = reasoner.prioritize_hazards(detections)
+            # Process detections (can be empty initially, tracker carries forward)
+            enriched = reasoner.prioritize_hazards(detections) if detections else []
 
             tracked = tracker.update(enriched, small)
 
@@ -278,6 +328,8 @@ def run(source, use_tts=True, sample_interval_ms=300):
 
             # Temporal
             temporal_objects = temporal.update(tracked, timestamp)
+            if temporal_objects:
+                has_seen_hazard = True
 
             # Memory
             memory.update(temporal_objects)
@@ -292,13 +344,25 @@ def run(source, use_tts=True, sample_interval_ms=300):
 
             # Caption
             # VLM disabled: always generate from temporal captioner.
-            _, full_caption = captioner.generate(
+            smoothed_instruction, full_caption = captioner.generate(
                 temporal_objects, instruction, urgency
             )
 
-            # TTS
+            if smoothed_instruction == last_smoothed_instruction:
+                instruction_streak += 1
+            else:
+                last_smoothed_instruction = smoothed_instruction
+                instruction_streak = 1
+
+            # TTS (use smoothed instruction, same as visual caption).
+            # Passive prompts are allowed, but only when stable; this avoids
+            # one-frame "Continue forward" blips on short clips.
             if speaker:
-                speaker.speak(instruction, urgency)
+                is_passive = "continue" in smoothed_instruction.lower()
+                if not is_passive:
+                    speaker.speak(smoothed_instruction, urgency)
+                elif has_seen_hazard and instruction_streak >= 3:
+                    speaker.speak(smoothed_instruction, urgency)
 
             # Visual
             vis = draw_boxes(frame.copy(), tracked)

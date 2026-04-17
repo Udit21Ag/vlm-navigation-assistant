@@ -22,7 +22,6 @@ models/*.pth
 
 runs/
 outputs/
-samples/
 papers/
 
 # Jupyter

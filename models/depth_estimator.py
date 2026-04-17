@@ -1,3 +1,15 @@
+"""Depth Estimation Module
+
+Estimates monocular depth (distance) for every pixel using MiDaS DPT-LeViT.
+Transforms RGB images into normalized depth maps [0, 1].
+
+Features:
+- Single-image depth estimation (no stereo required)
+- Relative depth information
+- Normalized output [0, 1] for easy threshold-based classification
+- Lightweight architecture (~51M parameters)
+"""
+
 import torch
 import cv2
 import numpy as np

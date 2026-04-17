@@ -1,5 +1,16 @@
-from ultralytics import YOLO
+"""Object Detection Module
 
+Detects vehicles, pedestrians, animals, and other hazards using YOLOv8
+fine-tuned on the Indian Driving Dataset (IDD).
+
+Supports:
+- Standard COCO classes (person, car, truck, etc.)
+- IDD-specific classes (autorickshaw, rider, motorcycle, animal)
+- Configurable confidence thresholds
+- Multiple detection profiles (fast, balanced, safety-first)
+"""
+
+from ultralytics import YOLO
 
 class ObjectDetector:
     def __init__(self, model_path="models/weights/idd_best.pt", conf_thresh=0.2, profile="balanced"):

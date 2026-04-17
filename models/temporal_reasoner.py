@@ -1,3 +1,16 @@
+"""Temporal Reasoning Module
+
+Analyzes object motion and state across multiple frames to detect hazardous
+motion patterns (approaching, crossing) and estimate time-to-collision.
+
+Features:
+- Motion vector computation (frame-to-frame displacement)
+- Approaching vehicle detection
+- Crossing pedestrian detection
+- Time-to-collision (TTC) estimation
+- Multi-frame state tracking
+"""
+
 import time
 from collections import defaultdict, deque
 

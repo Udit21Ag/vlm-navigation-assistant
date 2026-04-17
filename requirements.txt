@@ -1,30 +1,31 @@
-# Core deep learning
+# Deep Learning & Vision
 torch
 torchvision
+transformers
 
-# Object detection (YOLOv8)
-ultralytics
+# Object Detection
+ultralytics>=8.0.0
 
-# Computer vision
+# Computer Vision & Image Processing
 opencv-python
+Pillow
 
-# Numerical operations
+# Numerical & Scientific Computing
 numpy
 scipy
 
-# Text-to-speech
-pyttsx3
-
-# Image utilities used by MiDaS
-Pillow
-
-# Progress bars / utilities (used by ultralytics & midas)
-tqdm
-
-# YAML config parsing
-pyyaml
-
-# Object tracking (DeepSORT)
+# Object Tracking
 deep-sort-realtime
 
+# Depth Estimation
+# (MiDaS is included as git submodule in MiDAS/)
+
+# Text-to-Speech
+pyttsx3
+
+# Utilities
+tqdm
+pyyaml
+
+# Optional: Vision-Language Model (VQA validation)
 google-generativeai

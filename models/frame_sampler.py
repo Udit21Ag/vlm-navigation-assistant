@@ -40,7 +40,7 @@ class FrameSampler:
     # Public API
     # ------------------------------------------------------------------
     def open(self):
-        """Open the video source."""
+        """Open the video source and adapt sampling interval for short videos."""
         self._cap = cv2.VideoCapture(self.source)
         if not self._cap.isOpened():
             raise RuntimeError(
@@ -52,6 +52,17 @@ class FrameSampler:
             fps = self._cap.get(cv2.CAP_PROP_FPS) or 30
             total = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             duration = total / fps if fps else 0
+            
+            # Adaptive interval: ensure minimum 25 frames are sampled
+            # If video is short, reduce the interval proportionally
+            min_frames = 25
+            ideal_interval = int(duration * 1000 / min_frames) if duration > 0 else self.sample_interval_ms
+            
+            # Use the smaller of current interval or calculated ideal interval
+            # This ensures we get at least min_frames for short videos
+            if ideal_interval < self.sample_interval_ms:
+                self.sample_interval_ms = max(50, ideal_interval)  # Minimum 50ms between frames
+            
             print(f"[VIDEO] {self.source}")
             print(f"        {total} frames, {fps:.1f} FPS, "
                   f"{duration:.1f}s duration")
