@@ -35,8 +35,12 @@ class SceneMemory:
         self._decay_half_life = 2.0
         self._grid = OccupancyGrid()
         self._corridor = CorridorEstimator()
+        self._road_state = None  # populated by RoadDetector each frame
 
-    def update(self, temporal_objects):
+    def update(self, temporal_objects, road_state=None):
+        # Store latest road state for corridor estimator + cost map
+        if road_state is not None:
+            self._road_state = road_state
 
         now = time.monotonic()
         self._grid.decay()  # Forget stale occupancy data each frame
@@ -123,6 +127,16 @@ class SceneMemory:
 
             costs[z] = static + dyn_cost
 
+        # Apply road-drivability penalty: non-walkable zones get higher cost
+        if self._road_state is not None:
+            zone_drivable = self._road_state.get("zone_drivable", {})
+            edge_rel = float(self._road_state.get("edge_reliability", 0.0))
+            for z in ZONES:
+                drivable = float(zone_drivable.get(z, 1.0))
+                # Penalty scales with confidence (edge_reliability)
+                penalty = (1.0 - drivable) * (0.5 + 0.4 * edge_rel)
+                costs[z] += penalty
+
         return costs
 
     def get_cost_grid(self):
@@ -132,6 +146,7 @@ class SceneMemory:
         return self._corridor.select_best_corridor(
             self.get_cost_grid(),
             self.get_cost_map(),
+            road_state=self._road_state,
         )
 
     def get_safest_direction(self):

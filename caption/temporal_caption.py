@@ -29,9 +29,17 @@ class TemporalCaptionGenerator:
         self._recent_phrases = deque(maxlen=4)
 
     # Public API
-    def generate(self, temporal_objects, instruction, urgency="info"):
+    def generate(self, temporal_objects, instruction, urgency="info",
+                 road_state=None):
         """
         Build caption from temporal scene + navigation instruction.
+
+        Args:
+            temporal_objects: List of tracked hazard dicts.
+            instruction: Navigation instruction string.
+            urgency: "info" / "warning" / "critical".
+            road_state: Optional dict from RoadDetector with zone_drivable
+                        scores and corridor info.
 
         Returns:
             (smoothed_instruction: str, full_caption: str)
@@ -51,7 +59,16 @@ class TemporalCaptionGenerator:
                     if scene_parts:
                         # Remove trailing period from scene description to avoid double periods
                         scene_desc = scene_parts[0].rstrip(".")
-                        return smoothed, f"{scene_desc}. {smoothed}"
+                        caption = f"{scene_desc}. {smoothed}"
+                        # Append road context if available
+                        road_ctx = self._road_context(road_state)
+                        if road_ctx:
+                            caption += f" {road_ctx}"
+                        return smoothed, caption
+                # Add road context even for bare "continue forward"
+                road_ctx = self._road_context(road_state)
+                if road_ctx:
+                    return smoothed, f"{smoothed} {road_ctx}"
                 return smoothed, smoothed
 
         # --- Build scene description ---
@@ -60,6 +77,11 @@ class TemporalCaptionGenerator:
         # --- Limit verbosity ---
         parts = scene_parts[:self._max_descriptions]
         parts.append(smoothed)
+
+        # Append road context when directional
+        road_ctx = self._road_context(road_state)
+        if road_ctx:
+            parts.append(road_ctx)
 
         full_caption = " ".join(parts)
         self._recent_phrases.append(full_caption)
@@ -139,6 +161,35 @@ class TemporalCaptionGenerator:
             return f"{name} moving away {direction}."
         else:
             return f"{name} {distance} {direction}."
+
+    # ------------------------------------------------------------------
+    # Road-context phrase builder
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _road_context(road_state):
+        """Return a short phrase describing walkable-path context, or None."""
+        if road_state is None:
+            return None
+
+        zone_drivable = road_state.get("zone_drivable", {})
+        if not zone_drivable:
+            return None
+
+        center_d = float(zone_drivable.get("center", 0.0))
+        left_d = float(zone_drivable.get("left", 0.0))
+        right_d = float(zone_drivable.get("right", 0.0))
+
+        # Only mention if there's a clearly open path
+        if center_d > 0.60:
+            return "Road clear ahead."
+        elif left_d > 0.55 and right_d < 0.35:
+            return "Open path on your left."
+        elif right_d > 0.55 and left_d < 0.35:
+            return "Open path on your right."
+        elif left_d > 0.55 and right_d > 0.55:
+            return "Path open on both sides."
+
+        return None
 
     # ------------------------------------------------------------------
     # Anti-flicker smoothing

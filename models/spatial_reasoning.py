@@ -72,21 +72,21 @@ class SpatialReasoner:
             # Vertical position: 0 = top (far), 1 = bottom (close)
             vertical_ratio = bottom_y / self.h
             
-            # Size boost: large objects get bonus (+0 to +0.30)
-            # Normalized area of 0.04 (4% of image) gets max boost
-            size_boost = min(normalized_area / 0.04, 0.30)
+            # Size boost: large objects get bonus (+0 to +0.20)
+            # Normalized area of 0.05 (5% of image) gets max boost
+            size_boost = min(normalized_area / 0.05, 0.20)
             
-            # Position boost: lower in frame gets bonus (+0 to +0.20)
+            # Position boost: lower in frame gets bonus (+0 to +0.15)
             # Apply from middle onward
-            vertical_boost = max(0, (vertical_ratio - 0.4) * 0.4)
+            vertical_boost = max(0, (vertical_ratio - 0.5) * 0.3)
             
             # Combined score: depth + visual cues
             combined_score = depth_score + size_boost + vertical_boost
             
-            # Adaptive thresholds (more generous to account for FOV geometry)
-            very_close_threshold = 0.5 + (0.2 * vertical_ratio)  # 0.50-0.70
-            near_threshold = 0.35 + (0.2 * vertical_ratio)        # 0.35-0.55
-            moderate_threshold = 0.15 + (0.2 * vertical_ratio)    # 0.15-0.35
+            # Adaptive thresholds (raised to reduce false "very close")
+            very_close_threshold = 0.60 + (0.15 * vertical_ratio)  # 0.60-0.75
+            near_threshold = 0.40 + (0.15 * vertical_ratio)        # 0.40-0.55
+            moderate_threshold = 0.18 + (0.15 * vertical_ratio)    # 0.18-0.33
             
             if combined_score > very_close_threshold:
                 distance = "very close"

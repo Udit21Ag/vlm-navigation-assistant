@@ -42,9 +42,34 @@ class NavigationPlanner:
     # Vehicle labels that warrant STOP even in crowd mode
     _VEHICLE_LABELS = {"car", "bus", "truck", "autorickshaw"}
 
-    def decide(self, temporal_objects, cost_map, safest_zone, corridor=None):
+    def decide(self, temporal_objects, cost_map, safest_zone, corridor=None, road_state=None):
+
+        # --------------------------------------------------------------
+        # Rule 0.5 — Road walkability check (fires even with no objects)
+        # If the user's default heading (center) has very low drivable
+        # fraction, redirect toward the most walkable zone.
+        # --------------------------------------------------------------
+        if road_state is not None:
+            zone_drivable = road_state.get("zone_drivable", {})
+            center_drivable = float(zone_drivable.get("center", 1.0))
+
+            if center_drivable < 0.30:
+                # Center is blocked by a wall / ditch / off-road
+                left_d = (float(zone_drivable.get("left", 0.0))
+                          + float(zone_drivable.get("far left", 0.0)))
+                right_d = (float(zone_drivable.get("right", 0.0))
+                           + float(zone_drivable.get("far right", 0.0)))
+
+                if left_d > right_d + 0.1:
+                    return self.MOVE_LEFT, "warning"
+                elif right_d > left_d + 0.1:
+                    return self.MOVE_RIGHT, "warning"
+                else:
+                    # Both sides roughly equal — use cost_map tiebreaker
+                    return self._suggest_direction(cost_map, safest_zone), "warning"
 
         if not temporal_objects:
+            # Even with no objects, mention clear path if road data exists
             return self.FORWARD, "info"
 
         temporal_objects = sorted(
@@ -84,14 +109,35 @@ class NavigationPlanner:
 
         # --------------------------------------------------------------
         # Rule 1 — Immediate hazard (non-crowd mode)
+        # Gate: require minimum tracking confidence (3+ frames) to avoid
+        # one-frame false alarms from detection jitter.
+        # Gate: if road is clearly open ahead (drivable center > 50%),
+        # demand stronger evidence before STOP.
         # --------------------------------------------------------------
+        road_center_clear = False
+        if road_state is not None:
+            zd = road_state.get("zone_drivable", {})
+            road_center_clear = float(zd.get("center", 0.0)) > 0.50
+
         for obj in temporal_objects:
             ttc = obj.get("ttc", float("inf"))
+            frames = obj.get("frames_tracked", 1)
 
-            if ttc != float("inf") and ttc < 1.0:
+            # Skip objects tracked for fewer than 3 frames (unreliable motion)
+            if frames < 3:
+                continue
+
+            # TTC-based STOP: only for confirmed approaching objects
+            if (ttc != float("inf") and ttc < 0.8
+                    and obj["motion"] == "approaching"):
                 return self.STOP, "critical"
 
+            # Very close + approaching
             if obj["distance"] == "very close" and obj["motion"] == "approaching":
+                # If road is clearly open and object is NOT a vehicle,
+                # prefer AVOID over STOP (likely a pedestrian/false positive)
+                if road_center_clear and obj["label"] not in self._VEHICLE_LABELS:
+                    return self._avoid(obj, cost_map, safest_zone), "warning"
                 return self.STOP, "critical"
 
         # --------------------------------------------------------------

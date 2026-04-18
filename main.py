@@ -28,8 +28,9 @@ from models.navigation_planner import NavigationPlanner
 from models.metrics import RuntimeMetrics
 from caption.temporal_caption import TemporalCaptionGenerator
 from tts.event_speaker import EventSpeaker
-from utils.visualize import draw_boxes
+from utils.visualize import draw_boxes, draw_road_overlay
 from models.vlm_reasoner import VLMReasoner
+from models.road_detector import RoadDetector
 
 # ─────────────────────────────────────────────────────────────
 # Overlay functions
@@ -138,6 +139,7 @@ def run_image(image_path, use_tts=True):
     planner = NavigationPlanner()
     captioner = TemporalCaptionGenerator()
     vlm = VLMReasoner()
+    road_detector = RoadDetector()
     speaker = EventSpeaker() if use_tts else None
 
     frame = cv2.imread(image_path)
@@ -155,6 +157,9 @@ def run_image(image_path, use_tts=True):
     enriched_all = [reasoner.assign_risk(d.copy()) for d in detections]
     enriched = reasoner.prioritize_hazards(detections)
 
+    # Road / walkable-space detection (uses the same depth map — no extra model)
+    road_state = road_detector.detect(depth_map, frame, enriched_all)
+
     temporal_objects = [{
         "track_id": 0,
         "label": d["label"],
@@ -165,17 +170,18 @@ def run_image(image_path, use_tts=True):
     } for d in enriched]
 
     # Update memory with temporal objects to compute actual cost map
-    memory.update(temporal_objects)
+    memory.update(temporal_objects, road_state=road_state)
     cost_map = memory.get_cost_map()
     safest = memory.get_safest_direction()
 
     instruction, urgency = planner.decide(
-        temporal_objects, cost_map, safest, memory.get_best_corridor()
+        temporal_objects, cost_map, safest, memory.get_best_corridor(),
+        road_state=road_state
     )
 
     # Generate temporal caption first (good grouping, prioritization, conciseness)
     _, temporal_caption = captioner.generate(
-        temporal_objects, instruction, urgency
+        temporal_objects, instruction, urgency, road_state=road_state
     )
 
     # Refine temporal caption with VLM visual grounding
@@ -186,7 +192,8 @@ def run_image(image_path, use_tts=True):
     if speaker:
         speaker.speak(full_caption, urgency)
 
-    vis = draw_boxes(frame.copy(), enriched_all)
+    vis = draw_road_overlay(frame.copy(), road_state)
+    vis = draw_boxes(vis, enriched_all)
     vis = _overlay_instruction(vis, full_caption, urgency)
 
     os.makedirs("outputs", exist_ok=True)
@@ -233,6 +240,7 @@ def run(source, use_tts=True, sample_interval_ms=300, save_frames=False):
     memory = SceneMemory()
     planner = NavigationPlanner()
     captioner = TemporalCaptionGenerator()
+    road_detector = RoadDetector()
     speaker = EventSpeaker() if use_tts else None
     metrics = RuntimeMetrics()
 
@@ -296,6 +304,8 @@ def run(source, use_tts=True, sample_interval_ms=300, save_frames=False):
     has_seen_hazard = False
     last_smoothed_instruction = ""
     instruction_streak = 0
+    road_state = None          # latest RoadDetector output
+    ROAD_INTERVAL = 3          # run road detection every N frames
 
     with FrameSampler(source, sample_interval_ms=sample_interval_ms) as sampler:
 
@@ -350,21 +360,29 @@ def run(source, use_tts=True, sample_interval_ms=300, save_frames=False):
             if temporal_objects:
                 has_seen_hazard = True
 
+            # Road / walkable-space detection (runs on the existing depth map)
+            if depth_map is not None and (frame_count % ROAD_INTERVAL == 0 or road_state is None):
+                road_state = road_detector.detect(
+                    depth_map, small, prev_detections
+                )
+
             # Memory
-            memory.update(temporal_objects)
+            memory.update(temporal_objects, road_state=road_state)
             cost_map = memory.get_cost_map()
             safest = memory.get_safest_direction()
             corridor = memory.get_best_corridor()
 
             # Planning
             instruction, urgency = planner.decide(
-                temporal_objects, cost_map, safest, corridor
+                temporal_objects, cost_map, safest, corridor,
+                road_state=road_state
             )
 
             # Caption
             # VLM disabled: always generate from temporal captioner.
             smoothed_instruction, full_caption = captioner.generate(
-                temporal_objects, instruction, urgency
+                temporal_objects, instruction, urgency,
+                road_state=road_state
             )
 
             if smoothed_instruction == last_smoothed_instruction:
@@ -383,8 +401,9 @@ def run(source, use_tts=True, sample_interval_ms=300, save_frames=False):
                 elif has_seen_hazard and instruction_streak >= 3:
                     speaker.speak(smoothed_instruction, urgency)
 
-            # Visual
-            vis = draw_boxes(frame.copy(), tracked)
+            # Visual — road overlay + boxes + instruction
+            vis = draw_road_overlay(frame.copy(), road_state)
+            vis = draw_boxes(vis, tracked)
             vis = _overlay_instruction(vis, full_caption, urgency)
 
             fps = 1.0 / max(time.monotonic() - t0, 1e-6)

@@ -123,15 +123,40 @@ class TemporalReasoner:
 
         diff = avg_second - avg_first
 
-        # 🔥 FIXED threshold for normalized depth
-        # Higher threshold to filter ego-motion (walking camera makes everything appear approaching)
-        threshold = 0.06
+        # Higher threshold to aggressively filter ego-motion
+        # (walking camera makes everything appear approaching at ~0.04-0.08 per step)
+        threshold = 0.10
 
         # ----------------------------------------------------------
-        # PRIORITY 1: depth-based motion
+        # PRIORITY 1: depth-based motion WITH bbox cross-check
+        # True approaching objects get BOTH closer (depth increase) AND
+        # larger in the frame (bbox area grows).  Ego-motion increases
+        # depth for everything but bbox size stays roughly constant.
         # ----------------------------------------------------------
         if diff > threshold:
-            return "approaching"
+            # Cross-check: did the bounding box actually grow?
+            first_bboxes = [s["bbox"] for s in hist[:mid]]
+            second_bboxes = [s["bbox"] for s in hist[mid:]]
+
+            def avg_area(bboxes):
+                areas = []
+                for b in bboxes:
+                    if len(b) == 4:
+                        areas.append((b[2] - b[0]) * (b[3] - b[1]))
+                return sum(areas) / max(len(areas), 1)
+
+            area_first = avg_area(first_bboxes)
+            area_second = avg_area(second_bboxes)
+
+            # Require at least 8% bbox growth to confirm approach
+            # (rules out ego-motion which doesn't change object size)
+            if area_first > 0 and (area_second - area_first) / area_first > 0.08:
+                return "approaching"
+            # Depth says approaching but bbox didn't grow → likely ego-motion
+            # Still mark as approaching if depth change is very large (>0.18)
+            elif diff > 0.18:
+                return "approaching"
+            # Otherwise treat as stationary (ego-motion artefact)
         elif diff < -threshold:
             return "receding"
 
@@ -178,19 +203,26 @@ class TemporalReasoner:
 
     @staticmethod
     def _compute_ttc(history):
-        if len(history) < 2:
+        if len(history) < 3:
             return float("inf")
 
-        last = history[-1]
-        prev = history[-2]
+        # Use average of last 3 frames to smooth out noise
+        recent = list(history)[-3:]
+        first = recent[0]
+        last = recent[-1]
 
-        dt = last["timestamp"] - prev["timestamp"]
-        if dt < 1e-6:
+        dt = last["timestamp"] - first["timestamp"]
+        if dt < 0.05:  # need at least 50ms span for reliable estimate
             return float("inf")
 
-        depth_delta = last["depth"] - prev["depth"]
-        relative_speed = abs(depth_delta / dt)
-        if relative_speed < 1e-6:
+        depth_delta = last["depth"] - first["depth"]
+
+        # Only compute TTC for objects getting closer (positive delta)
+        if depth_delta <= 0.01:
+            return float("inf")
+
+        relative_speed = depth_delta / dt
+        if relative_speed < 0.02:  # ignore very slow changes (likely noise)
             return float("inf")
 
         remaining = max(0.0, 1.0 - last["depth"])
