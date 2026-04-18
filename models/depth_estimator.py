@@ -13,11 +13,14 @@ Features:
 import torch
 import cv2
 import numpy as np
+import os
 import sys
+import threading
 
-sys.path.append("MiDaS")
+# Use absolute path so this works regardless of CWD
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "MiDaS"))
 
-from midas.model_loader import load_model
+from MiDaS.midas.model_loader import load_model
 
 
 class DepthEstimator:
@@ -41,6 +44,7 @@ class DepthEstimator:
         self.prev_depth = None
         self._running_low = None
         self._running_high = None
+        self._lock = threading.Lock()  # Protect mutable state from concurrent access
 
     def estimate_depth(self, image):
 
@@ -71,23 +75,24 @@ class DepthEstimator:
         low = float(np.percentile(depth, 5))
         high = float(np.percentile(depth, 95))
 
-        if self._running_low is None:
-            self._running_low = low
-            self._running_high = high
-        else:
-            self._running_low = 0.9 * self._running_low + 0.1 * low
-            self._running_high = 0.9 * self._running_high + 0.1 * high
+        with self._lock:
+            if self._running_low is None:
+                self._running_low = low
+                self._running_high = high
+            else:
+                self._running_low = 0.9 * self._running_low + 0.1 * low
+                self._running_high = 0.9 * self._running_high + 0.1 * high
 
-        if self._running_high - self._running_low > 1e-6:
-            depth = (depth - self._running_low) / (self._running_high - self._running_low)
+            if self._running_high - self._running_low > 1e-6:
+                depth = (depth - self._running_low) / (self._running_high - self._running_low)
 
-        depth = np.clip(depth, 0.0, 1.0)
+            depth = np.clip(depth, 0.0, 1.0)
 
-        # Temporal smoothing (optional but useful)
-        if self.prev_depth is not None:
-            depth = 0.7 * depth + 0.3 * self.prev_depth
+            # Temporal smoothing (optional but useful)
+            if self.prev_depth is not None:
+                depth = 0.7 * depth + 0.3 * self.prev_depth
 
-        self.prev_depth = depth
+            self.prev_depth = depth
 
         return depth
 

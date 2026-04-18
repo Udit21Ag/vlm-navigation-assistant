@@ -110,12 +110,12 @@ class EventSpeaker:
         self._current_proc.wait()
 
     def _speak_pyttsx3(self, text):
-        import pyttsx3
-        engine = pyttsx3.init()
-        engine.setProperty("rate", self._rate)
-        engine.say(text)
-        engine.runAndWait()
-        engine.stop()
+        if not hasattr(self, '_pyttsx3_engine'):
+            import pyttsx3
+            self._pyttsx3_engine = pyttsx3.init()
+            self._pyttsx3_engine.setProperty("rate", self._rate)
+        self._pyttsx3_engine.say(text)
+        self._pyttsx3_engine.runAndWait()
 
     def _kill_current(self):
         if self._current_proc is not None:

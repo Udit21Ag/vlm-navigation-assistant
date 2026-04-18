@@ -214,7 +214,6 @@ python main.py --source 0
 │   ├── vlm_reasoner.py              # BLIP VQA validation
 │   ├── occupancy_grid.py            # Spatial probability grid
 │   ├── corridor_estimator.py        # Safe navigation path detection
-│   ├── planner_state.py             # Instruction enums
 │   └── weights/
 │       └── idd_best.pt              # YOLOv8 fine-tuned on Indian Driving Dataset
 │

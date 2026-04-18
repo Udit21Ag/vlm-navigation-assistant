@@ -31,13 +31,16 @@ class NavigationPlanner:
     MOVE_RIGHT = "Move right."
     EDGE_LEFT  = "Stay on the left edge."
     EDGE_RIGHT = "Stay on the right edge."
-    CAUTION    = "Proceed with caution."
+    GAP_LEFT   = "Gap on the left, move left."
+    GAP_RIGHT  = "Gap on the right, move right."
     FORWARD    = "Continue forward."
 
     ROAD_THRESHOLD = 1.2
 
     def __init__(self, state=None):
         self.state = state
+    # Vehicle labels that warrant STOP even in crowd mode
+    _VEHICLE_LABELS = {"car", "bus", "truck", "autorickshaw"}
 
     def decide(self, temporal_objects, cost_map, safest_zone, corridor=None):
 
@@ -53,7 +56,34 @@ class NavigationPlanner:
         )
 
         # --------------------------------------------------------------
-        # Rule 1 — Immediate hazard
+        # Crowd detection — walking through a crowd is normal, not an emergency
+        # When many objects are close (pedestrians), navigate through gaps
+        # instead of spamming STOP.
+        # --------------------------------------------------------------
+        total = len(temporal_objects)
+        close_count = sum(
+            1 for o in temporal_objects
+            if o["distance"] in ("very close", "near")
+        )
+        is_crowd = total >= 8 and close_count >= total * 0.35
+
+        if is_crowd:
+            # In crowd mode: only STOP for vehicles, not pedestrians
+            for obj in temporal_objects:
+                if obj["label"] in self._VEHICLE_LABELS:
+                    ttc = obj.get("ttc", float("inf"))
+                    if obj["distance"] == "very close" and obj["motion"] == "approaching":
+                        return self.STOP, "critical"
+                    if ttc != float("inf") and ttc < 0.8:
+                        return self.STOP, "critical"
+                    if obj["distance"] == "very close":
+                        return self._avoid(obj, cost_map, safest_zone), "warning"
+
+            # Skip to gap-finding for pedestrians in crowd
+            return self._find_crowd_gap(temporal_objects, cost_map, safest_zone)
+
+        # --------------------------------------------------------------
+        # Rule 1 — Immediate hazard (non-crowd mode)
         # --------------------------------------------------------------
         for obj in temporal_objects:
             ttc = obj.get("ttc", float("inf"))
@@ -80,17 +110,6 @@ class NavigationPlanner:
             and o["distance"] in ("very close", "near", "moderate distance")
         ]
         if center_objects:
-            # Count hazards on each side
-            left_risk = sum(
-                o["risk"] for o in temporal_objects
-                if o["zone"] in ("left", "far left")
-            )
-
-            right_risk = sum(
-                o["risk"] for o in temporal_objects
-                if o["zone"] in ("right", "far right")
-            )
-
             # Bias against traffic classes
             def traffic_penalty(obj):
                 return 2.0 if obj["label"] in ["car", "motorcycle", "bus", "truck"] else 1.0
@@ -109,8 +128,11 @@ class NavigationPlanner:
 
             if left_risk > right_risk:
                 return self.MOVE_RIGHT, "warning"
-            else:
+            elif right_risk > left_risk:
                 return self.MOVE_LEFT, "warning"
+            else:
+                # Tie-break using cost map (avoids systematic left-bias)
+                return self._suggest_direction(cost_map, safest_zone), "warning"
 
         # --------------------------------------------------------------
         # Rule 4 — Approaching objects
@@ -135,83 +157,78 @@ class NavigationPlanner:
 
         # --------------------------------------------------------------
         # Rule 5.7 — Road penalty (PRIORITY: center is blocked)
-        # Check this BEFORE far hazards rule because center blockage takes
-        # precedence over individual distant objects
+        # Only fires when there are actual close/near/moderate hazards.
+        # Far-only objects should NOT trigger edge navigation.
         # --------------------------------------------------------------
-        if cost_map.get("center", 0) > self.ROAD_THRESHOLD:
-            if safest_zone in ("left", "far left"):
+        has_proximate_hazards = any(
+            o["distance"] in ("very close", "near", "moderate distance")
+            for o in temporal_objects
+        )
+
+        if has_proximate_hazards and cost_map.get("center", 0) > self.ROAD_THRESHOLD:
+            # Use cost_map comparison directly to avoid safest_zone left-bias
+            left_cost = cost_map.get("left", 0.25) + cost_map.get("far left", 0.15)
+            right_cost = cost_map.get("right", 0.25) + cost_map.get("far right", 0.15)
+
+            if left_cost < right_cost - 0.1:
                 return self.EDGE_LEFT, "info"
-            elif safest_zone in ("right", "far right"):
+            elif right_cost < left_cost - 0.1:
                 return self.EDGE_RIGHT, "info"
             else:
+                # Both sides roughly equal — pick the side with fewer hazards
                 return self._suggest_direction(cost_map, safest_zone), "info"
 
         # --------------------------------------------------------------
-        # Rule 5.5 — Distant hazards (far + single-side moderate distance)
-        # For hazards that are either far OR only on one side at moderate distance,
-        # prefer forward movement. Only suggest lateral movement if one side is
-        # significantly safer.
-        # (This rule only triggers if center penalty is not active)
+        # Rule 5.5 — Distant/far hazards → find gaps and direct user
+        # Analyzes zone distribution to find the least occupied side
+        # and gives specific directional guidance.
         # --------------------------------------------------------------
-        
-        # Check for far hazards
-        far_objects = [
-            o for o in temporal_objects
-            if o["distance"] == "far"
-        ]
-        
-        # Check for single-side moderate hazards (only left OR only right blocked)
-        moderate_objects = [
-            o for o in temporal_objects
-            if o["distance"] == "moderate distance"
-        ]
-        
-        very_close_near_objects = [
-            o for o in temporal_objects
-            if o["distance"] in ("very close", "near")
-        ]
-        
-        # Determine if we should apply distant-hazard preference
-        left_moderate = [o for o in moderate_objects if o["zone"] in ("left", "far left")]
-        right_moderate = [o for o in moderate_objects if o["zone"] in ("right", "far right")]
-        left_far = [o for o in far_objects if o["zone"] in ("left", "far left")]
-        right_far = [o for o in far_objects if o["zone"] in ("right", "far right")]
-        
-        # Apply rule if:
-        # 1. Only far hazards exist, OR
-        # 2. No very-close/near hazards AND only one side has moderate hazards (not both)
-        should_apply_distant_rule = (
-            (far_objects and not very_close_near_objects and not moderate_objects) or
-            (moderate_objects and not very_close_near_objects and not (left_moderate and right_moderate))
-        )
-        
-        if should_apply_distant_rule:
-            # Combine far + moderate hazards for decision
-            distant_objects = far_objects + moderate_objects
-            
-            left_cost = cost_map.get("left", 0.25) + cost_map.get("far left", 0.15)
-            right_cost = cost_map.get("right", 0.25) + cost_map.get("far right", 0.15)
-            
-            # If cost difference is small, continue forward (less disruptive)
-            if abs(left_cost - right_cost) < 0.35:
+        far_objects = [o for o in temporal_objects if o["distance"] == "far"]
+        moderate_objects = [o for o in temporal_objects if o["distance"] == "moderate distance"]
+        very_close_near = [o for o in temporal_objects if o["distance"] in ("very close", "near")]
+
+        if not very_close_near and (far_objects or moderate_objects):
+            all_distant = far_objects + moderate_objects
+
+            # Count objects per zone (weighted by risk)
+            zone_load = {"far left": 0.0, "left": 0.0, "center": 0.0,
+                         "right": 0.0, "far right": 0.0}
+            for o in all_distant:
+                z = o.get("zone", "center")
+                if z in zone_load:
+                    zone_load[z] += max(o.get("risk", 0.1), 0.1)
+
+            # Aggregate left vs right load
+            left_load = zone_load["far left"] + zone_load["left"]
+            right_load = zone_load["far right"] + zone_load["right"]
+            center_load = zone_load["center"]
+            total = left_load + right_load + center_load
+
+            # If very few objects overall, just go forward
+            if total < 0.5:
                 return self.FORWARD, "info"
-            
-            # Both sides have hazards and cost difference is significant
-            distant_objects = far_objects + moderate_objects
-            left_risk = sum(
-                o["risk"] for o in distant_objects
-                if o["zone"] in ("left", "far left")
-            )
-            right_risk = sum(
-                o["risk"] for o in distant_objects
-                if o["zone"] in ("right", "far right")
-            )
-            
-            if left_risk > right_risk:
-                return self.MOVE_RIGHT, "info"
-            elif right_risk > left_risk:
-                return self.MOVE_LEFT, "info"
-            # If equal, fall through to corridor
+
+            # Find the gap — the side with significantly less load
+            load_diff = left_load - right_load
+
+            if load_diff > 0.3:
+                # Left is more crowded → gap is on the right
+                return self.GAP_RIGHT, "info"
+            elif load_diff < -0.3:
+                # Right is more crowded → gap is on the left
+                return self.GAP_LEFT, "info"
+            elif center_load > left_load and center_load > right_load:
+                # Center is most crowded, pick least crowded side
+                if left_load <= right_load:
+                    return self.GAP_LEFT, "info"
+                else:
+                    return self.GAP_RIGHT, "info"
+            else:
+                # Roughly balanced — forward is fine if center isn't too crowded
+                if center_load < 1.0:
+                    return self.FORWARD, "info"
+                # Center crowded but sides balanced — pick right (pedestrian side)
+                return self.GAP_RIGHT, "info"
 
         # --------------------------------------------------------------
         # Rule 6 — (moved to before Rule 5.5 as Rule 5.7)
@@ -251,13 +268,61 @@ class NavigationPlanner:
     # --------------------------------------------------------------
     @staticmethod
     def _suggest_direction(cost_map, safest_zone):
+        """Pick left or right using cost_map comparison (avoids safest_zone left-bias)."""
+        left_cost = cost_map.get("left", 1) + cost_map.get("far left", 1)
+        right_cost = cost_map.get("right", 1) + cost_map.get("far right", 1)
 
-        if safest_zone in ("left", "far left"):
+        if left_cost < right_cost - 0.05:
             return NavigationPlanner.MOVE_LEFT
-        elif safest_zone in ("right", "far right"):
+        elif right_cost < left_cost - 0.05:
             return NavigationPlanner.MOVE_RIGHT
         else:
+            # Costs nearly equal — use safest_zone as tiebreaker
+            if safest_zone in ("left", "far left"):
+                return NavigationPlanner.MOVE_LEFT
+            elif safest_zone in ("right", "far right"):
+                return NavigationPlanner.MOVE_RIGHT
+            else:
+                # True tie — default to right (safer pedestrian side in left-hand-traffic countries)
+                return NavigationPlanner.MOVE_RIGHT
+
+    # --------------------------------------------------------------
+    @staticmethod
+    def _find_crowd_gap(temporal_objects, cost_map, safest_zone):
+        """Find the least occupied zone in a crowd and direct user there."""
+
+        # Count objects per zone, weighted by proximity (closer = heavier)
+        zone_load = {"far left": 0.0, "left": 0.0, "center": 0.0,
+                     "right": 0.0, "far right": 0.0}
+        _DIST_WEIGHT = {"very close": 1.0, "near": 0.7, "moderate distance": 0.4, "far": 0.15}
+
+        for o in temporal_objects:
+            z = o.get("zone", "center")
+            if z in zone_load:
+                w = _DIST_WEIGHT.get(o.get("distance", "far"), 0.15)
+                zone_load[z] += w
+
+        left_load = zone_load["far left"] + zone_load["left"]
+        right_load = zone_load["far right"] + zone_load["right"]
+        center_load = zone_load["center"]
+
+        # Find least crowded side
+        load_diff = left_load - right_load
+
+        if load_diff > 0.5:
+            return NavigationPlanner.GAP_RIGHT, "warning"
+        elif load_diff < -0.5:
+            return NavigationPlanner.GAP_LEFT, "warning"
+        elif center_load > left_load and center_load > right_load:
+            # Center most crowded — pick the emptier side
+            if left_load <= right_load:
+                return NavigationPlanner.GAP_LEFT, "warning"
+            else:
+                return NavigationPlanner.GAP_RIGHT, "warning"
+        else:
+            # All zones roughly equal — suggest the side with lower cost_map
             left_cost = cost_map.get("left", 1) + cost_map.get("far left", 1)
             right_cost = cost_map.get("right", 1) + cost_map.get("far right", 1)
-
-            return NavigationPlanner.MOVE_LEFT if left_cost < right_cost else NavigationPlanner.MOVE_RIGHT
+            if left_cost < right_cost:
+                return NavigationPlanner.GAP_LEFT, "warning"
+            return NavigationPlanner.GAP_RIGHT, "warning"

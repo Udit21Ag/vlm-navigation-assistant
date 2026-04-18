@@ -147,7 +147,7 @@ class SpatialReasoner:
                 depth_value = np.mean(region)
 
             # 🔥 FIX: use normalized depth directly
-                depth_score = float(np.clip(depth_value, 0.0, 1.0))
+            depth_score = float(np.clip(depth_value, 0.0, 1.0))
 
             lateral_score = 1 - abs(obj_x - self.w / 2) / (self.w / 2)
             lateral_score = max(0, lateral_score)

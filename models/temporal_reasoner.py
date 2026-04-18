@@ -124,7 +124,8 @@ class TemporalReasoner:
         diff = avg_second - avg_first
 
         # 🔥 FIXED threshold for normalized depth
-        threshold = 0.02
+        # Higher threshold to filter ego-motion (walking camera makes everything appear approaching)
+        threshold = 0.06
 
         # ----------------------------------------------------------
         # PRIORITY 1: depth-based motion

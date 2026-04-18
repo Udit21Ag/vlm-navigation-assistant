@@ -39,6 +39,7 @@ class SceneMemory:
     def update(self, temporal_objects):
 
         now = time.monotonic()
+        self._grid.decay()  # Forget stale occupancy data each frame
         new_dynamic = {z: 0.0 for z in ZONES}
 
         for obj in temporal_objects:
@@ -136,8 +137,14 @@ class SceneMemory:
     def get_safest_direction(self):
         corridor = self.get_best_corridor()
         if corridor:
-            return corridor.get("direction", min(self.get_cost_map(), key=self.get_cost_map().get))
-        return min(self.get_cost_map(), key=self.get_cost_map().get)
+            return corridor.get("direction", self._min_cost_zone())
+        return self._min_cost_zone()
+
+    def _min_cost_zone(self):
+        """Return lowest-cost zone, preferring center over edges on ties."""
+        cost_map = self.get_cost_map()
+        _ZONE_PRIORITY = ["center", "right", "left", "far right", "far left"]
+        return min(_ZONE_PRIORITY, key=lambda z: cost_map.get(z, 999.0))
 
     def is_road_zone(self, zone):
         return zone == "center"

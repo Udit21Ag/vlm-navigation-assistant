@@ -45,7 +45,10 @@ class CorridorEstimator:
                 zone_scores["far left"] += 0.25
                 zone_scores["far right"] += 0.25
 
-        best_zone = min(zone_scores, key=zone_scores.get)
+        # Break ties deterministically: prefer center > right > left
+        # (avoids systematic left-bias from Python dict iteration order)
+        _ZONE_PRIORITY = ["center", "right", "left", "far right", "far left"]
+        best_zone = min(_ZONE_PRIORITY, key=lambda z: zone_scores.get(z, 999.0))
         return {
             "direction": best_zone,
             "score": zone_scores[best_zone],

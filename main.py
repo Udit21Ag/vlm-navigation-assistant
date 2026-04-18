@@ -110,7 +110,7 @@ def _overlay_metrics(frame, metrics):
     text = f"LAT {metrics['latency']*1000:.0f}ms  FLIP {metrics['flip_rate']:.2f}"
     cv2.putText(
         frame, text,
-        (10, h - 60),
+        (10, 50),
         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2
     )
     return frame
@@ -120,6 +120,15 @@ def _overlay_metrics(frame, metrics):
 # IMAGE MODE
 # ─────────────────────────────────────────────────────────────
 def run_image(image_path, use_tts=True):
+
+    # Validate model weights before loading
+    for path, desc in [("models/weights/idd_best.pt", "YOLOv8-IDD"),
+                       ("MiDaS/weights/dpt_levit_224.pt", "MiDaS depth")]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Required model weight not found: {path} ({desc})\n"
+                f"See README.md for download instructions."
+            )
 
     print("[INIT] Loading models...")
 
@@ -202,9 +211,18 @@ def run_image(image_path, use_tts=True):
 # ─────────────────────────────────────────────────────────────
 # VIDEO MODE
 # ─────────────────────────────────────────────────────────────
-def run(source, use_tts=True, sample_interval_ms=300):
+def run(source, use_tts=True, sample_interval_ms=300, save_frames=False):
 
     os.makedirs("outputs", exist_ok=True)
+
+    # Validate model weights before loading
+    for path, desc in [("models/weights/idd_best.pt", "YOLOv8-IDD"),
+                       ("MiDaS/weights/dpt_levit_224.pt", "MiDaS depth")]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Required model weight not found: {path} ({desc})\n"
+                f"See README.md for download instructions."
+            )
 
     print("[INIT] Loading models...")
     depth_estimator = DepthEstimator()
@@ -281,6 +299,7 @@ def run(source, use_tts=True, sample_interval_ms=300):
 
     with FrameSampler(source, sample_interval_ms=sample_interval_ms) as sampler:
 
+      try:
         for frame, timestamp in sampler:
 
             t0 = time.monotonic()
@@ -391,8 +410,8 @@ def run(source, use_tts=True, sample_interval_ms=300):
 
             writer.write(vis)
 
-            # SAVE FRAMES (optional)
-            if frame_count % 5 == 0:
+            # SAVE FRAMES (only when flag is set)
+            if save_frames and frame_count % 5 == 0:
                 cv2.imwrite(f"outputs/frame_{frame_count:04d}.jpg", vis)
 
             cv2.imshow("Navigation Assistant", vis)
@@ -403,11 +422,11 @@ def run(source, use_tts=True, sample_interval_ms=300):
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
-    writer.release()
-    cv2.destroyAllWindows()
-
-    if speaker:
-        speaker.shutdown()
+      finally:
+        writer.release()
+        cv2.destroyAllWindows()
+        if speaker:
+            speaker.shutdown()
 
     total = time.monotonic() - t_loop_start
     print(f"[DONE] {frame_count} frames in {total:.1f}s "
@@ -428,6 +447,8 @@ if __name__ == "__main__":
     parser.add_argument("--image", type=str, default=None)
     parser.add_argument("--no-tts", action="store_true")
     parser.add_argument("--interval", type=int, default=300)
+    parser.add_argument("--save-frames", action="store_true",
+                        help="Save individual frames to outputs/ (can fill disk on long videos)")
 
     args = parser.parse_args()
 
@@ -437,10 +458,11 @@ if __name__ == "__main__":
     elif args.source:
         try:
             source = int(args.source)
-        except:
+        except ValueError:
             source = args.source
 
-        run(source, use_tts=not args.no_tts, sample_interval_ms=args.interval)
+        run(source, use_tts=not args.no_tts, sample_interval_ms=args.interval,
+            save_frames=args.save_frames)
 
     else:
         print("Provide --source or --image")

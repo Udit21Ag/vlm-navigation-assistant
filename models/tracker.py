@@ -51,6 +51,11 @@ class _Track:
     time_since_update: int = 0
     last_center: tuple = None
     velocity: tuple = (0.0, 0.0)
+    extra_fields: dict = None  # Preserve spatial reasoning fields (direction, distance, etc.)
+
+    def __post_init__(self):
+        if self.extra_fields is None:
+            self.extra_fields = {}
 
 
 class ObjectTracker:
@@ -98,12 +103,18 @@ class ObjectTracker:
                 track.last_center = new_center
                 track.hits += 1
                 track.time_since_update = 0
+                # Preserve spatial reasoning fields
+                track.extra_fields = {
+                    k: v for k, v in det.items()
+                    if k not in ("bbox", "label", "confidence")
+                }
                 matched_tracks.add(track.track_id)
                 unmatched_detections.remove(best_det_idx)
 
         for det_idx in unmatched_detections:
             det = detections[det_idx]
             center = _bbox_center(det["bbox"])
+            extra = {k: v for k, v in det.items() if k not in ("bbox", "label", "confidence")}
             track = _Track(
                 track_id=self.next_id,
                 bbox=det["bbox"],
@@ -114,6 +125,7 @@ class ObjectTracker:
                 time_since_update=0,
                 last_center=center,
                 velocity=(0.0, 0.0),
+                extra_fields=extra,
             )
             self.next_id += 1
             self._tracks.append(track)
@@ -127,7 +139,7 @@ class ObjectTracker:
             if track.hits < self.min_hits and track.time_since_update > 0:
                 continue
 
-            tracked.append({
+            obj = {
                 "track_id": track.track_id,
                 "bbox": [float(v) for v in track.bbox],
                 "label": track.label,
@@ -136,6 +148,9 @@ class ObjectTracker:
                 "track_hits": track.hits,
                 "track_lost": track.time_since_update,
                 "track_velocity": track.velocity,
-            })
+            }
+            # Pass through spatial reasoning fields (direction, distance, risk_score, etc.)
+            obj.update(track.extra_fields)
+            tracked.append(obj)
 
         return tracked
